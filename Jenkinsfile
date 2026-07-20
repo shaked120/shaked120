@@ -1,20 +1,58 @@
 pipeline {
     agent any
 
-    stages {
+    environment {
+        IMAGE_NAME = 'jenkins-flask-demo'
+        CONTAINER_NAME = 'jenkins-flask-test'
+    }
 
-        stage('Checkout Test') {
+    stages {
+        stage('Checkout') {
             steps {
-                echo 'Jenkins loaded this pipeline from Git'
+                echo 'Source code was downloaded from GitHub'
             }
         }
 
-        stage('System Info') {
+        stage('Install Dependencies') {
             steps {
                 sh '''
-                    echo "Host: $(hostname)"
-                    echo "User: $(whoami)"
-                    uname -a
+                    python3 -m venv venv
+                    ./venv/bin/pip install --upgrade pip
+                    ./venv/bin/pip install -r requirements.txt
+                '''
+            }
+        }
+
+        stage('Test') {
+            steps {
+                sh '''
+                    ./venv/bin/pytest -v
+                '''
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                sh '''
+                    docker build \
+                      -t ${IMAGE_NAME}:${BUILD_NUMBER} \
+                      -t ${IMAGE_NAME}:latest \
+                      .
+                '''
+            }
+        }
+
+        stage('Run Container') {
+            steps {
+                sh '''
+                    docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
+
+                    docker run -d \
+                      --name ${CONTAINER_NAME} \
+                      -p 5000:5000 \
+                      ${IMAGE_NAME}:${BUILD_NUMBER}
+
+                    sleep 5
                 '''
             }
         }
@@ -22,8 +60,7 @@ pipeline {
         stage('Health Check') {
             steps {
                 sh '''
-                    df -h /
-                    free -h
+                    curl --fail http://localhost:5000/health
                 '''
             }
         }
@@ -31,15 +68,20 @@ pipeline {
 
     post {
         success {
-            echo 'Pipeline completed successfully'
+            echo 'CI Pipeline completed successfully'
         }
 
         failure {
-            echo 'Pipeline failed - check the Console Output'
+            echo 'Pipeline failed — check the Console Output'
         }
 
         always {
-            echo 'This runs whether the build succeeds or fails'
+            sh '''
+                docker logs ${CONTAINER_NAME} 2>/dev/null || true
+                docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
+            '''
+
+            echo 'Pipeline cleanup completed'
         }
     }
 }
